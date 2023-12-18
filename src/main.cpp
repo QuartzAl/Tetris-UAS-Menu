@@ -46,10 +46,59 @@ int players = 0;
 int timeMinutes = 0;
 unsigned long endTimeMilis = 0;
 char tetrominoList[100];
-int playerScores[8];
+int player1Score;
+int player2Score;
 unsigned long lastTimePoll = 0;
 unsigned long lastTimeTimer = 0;
 unsigned long currentTime = 0;
+
+int tournamentPlayers[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+int tournamentRound = 0;
+int tournamentMatch = 0;
+int tournamentPlayer1Index = 0;
+int tournamentPlayer2Index = 0;
+int alivePlayers = 0;
+
+bool skipMenu = false;
+
+void startNextRound();
+void moveMenu(int menu);
+void startGame();
+
+void startNextRound() {
+  // count number of non zero values in tournamentWinners array and remove zeros
+  int nonZeroCount = 0;
+  for (int i = 0; i < players; i++) {
+    if (tournamentPlayers[i] != 0) {
+      nonZeroCount++;
+    }
+  }
+  int nonZeroIndex = 0;
+  for (int i = 0; i < players; i++) {
+    if (tournamentPlayers[i] != 0) {
+      tournamentPlayers[nonZeroIndex] = tournamentPlayers[i];
+      nonZeroIndex++;
+    }
+  }
+  alivePlayers = nonZeroCount;
+  if (alivePlayers <= 1) {
+    competitiveMode = false;
+    Serial.println("Tournament over");
+    moveMenu(GAME_OVER);
+  }
+
+  // Start the next round
+  tournamentMatch = 1;
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Round ");
+  lcd.print(++tournamentRound);
+
+  // Wait for button press to start the round
+  while (digitalRead(SW) == HIGH) {
+    delay(100);
+  }
+}
 
 void startGame() {
   menuNumber = START_GAME;
@@ -60,9 +109,25 @@ void startGame() {
   for (int i = 0; i < 100; i++) {
     tetrominoList[i] = random(0, 7);
   }
+
+  if (competitiveMode) {
+    tournamentMatch++;
+    int nextPlayer1Index = (tournamentMatch - 1) * 2;
+    int nextPlayer2Index = (tournamentMatch - 1) * 2 + 1;
+
+    if (tournamentPlayers[nextPlayer1Index] == 0 ||
+        tournamentPlayers[nextPlayer2Index] == 0) {
+      // start of new round
+      startNextRound();
+      nextPlayer1Index = (tournamentMatch - 1) * 2;
+      nextPlayer2Index = (tournamentMatch - 1) * 2 + 1;
+    }
+    tournamentPlayer1Index = nextPlayer1Index;
+    tournamentPlayer2Index = nextPlayer2Index;
+  }
+
   for (int controllerAddress = 8; controllerAddress <= 7 + CONTROLLER_COUNT;
        controllerAddress++) {
-
     Wire.beginTransmission(controllerAddress);
     Wire.write(START_GAME_COMMAND);
 
@@ -113,12 +178,26 @@ void startGame() {
 
     delay(100);
 
-    // game started
-    lcd.clear();
-    lcd.setCursor(0, 0);
-    lcd.print("Game started!");
-    lcd.setCursor(0, 1);
-    lcd.print("Good luck!");
+    if (!competitiveMode) { // game started
+      lcd.clear();
+      lcd.setCursor(0, 0);
+      lcd.print("Game started!");
+      lcd.setCursor(0, 1);
+      lcd.print("Good luck!");
+    } else {
+      lcd.clear();
+      lcd.setCursor(0, 0);
+      lcd.print("Player ");
+      lcd.print(tournamentPlayers[tournamentPlayer1Index]);
+      lcd.print(" vs ");
+      lcd.setCursor(0, 1);
+      lcd.print("Player ");
+      lcd.print(tournamentPlayers[tournamentPlayer2Index]);
+    }
+    if (timerMode && !competitiveMode) {
+      lcd.setCursor(0, 1);
+      lcd.print("Time left: ");
+    }
   }
 }
 
@@ -129,7 +208,7 @@ void moveMenu(int menu) {
     lcd.setCursor(0, 0);
     lcd.print("Player Mode: ");
     lcd.setCursor(0, 1);
-    lcd.print("> Classic");
+    lcd.print("> Casual");
     menuSelection = 0;
   } else if (menu == GAMEMODE_MENU) {
     menuNumber = GAMEMODE_MENU;
@@ -137,7 +216,7 @@ void moveMenu(int menu) {
     lcd.setCursor(0, 0);
     lcd.print("Gamemode: ");
     lcd.setCursor(0, 1);
-    lcd.print("> Classic");
+    lcd.print("> Survival");
     menuSelection = 0;
   } else if (menu == PLAYER_COUNT_MENU) {
     menuNumber = PLAYER_COUNT_MENU;
@@ -159,11 +238,21 @@ void moveMenu(int menu) {
     startGame();
   } else if (menu == GAME_OVER) {
     menuNumber = GAME_OVER;
-    lcd.clear();
-    lcd.setCursor(0, 0);
-    lcd.print("Collecting points");
-    lcd.setCursor(0, 1);
-    lcd.print("please wait");
+    if (!skipMenu) {
+      lcd.clear();
+      lcd.setCursor(0, 0);
+      lcd.print("Collecting points");
+      lcd.setCursor(0, 1);
+      lcd.print("please wait");
+      // make regular dots animation with delay
+      lcd.setCursor(12, 1);
+      lcd.print("   ");
+      lcd.setCursor(12, 1);
+      for (int i = 0; i < 4; i++) {
+        lcd.print(".");
+        delay(250);
+      }
+    }
   }
 }
 
@@ -202,7 +291,7 @@ bool previousButtonPressed = true;
 void loop() {
   encoder->tick();
   bool buttonPressed = false;
-  
+
   bool changed = false;
 
   int newPos = encoder->getPosition();
@@ -248,11 +337,11 @@ void loop() {
       lcd.print(menuSelectionString);
     }
     if (buttonPressed) {
-      moveMenu(GAMEMODE_MENU);
-
       if (menuSelection == 1) {
         competitiveMode = true;
+        Serial.println("Competitive mode selected");
       }
+      moveMenu(GAMEMODE_MENU);
     }
   } else if (menuNumber == GAMEMODE_MENU) {
     if (menuSelection < 0) {
@@ -260,7 +349,7 @@ void loop() {
     }
     menuSelection = menuSelection % 2;
     String menuSelectionString =
-        menuSelection == 0 ? "Classic   " : "Timer    ";
+        menuSelection == 0 ? "Survival   " : "Timer    ";
     if (changed) {
       lcd.setCursor(2, 1);
       lcd.print(menuSelectionString);
@@ -268,6 +357,7 @@ void loop() {
     if (buttonPressed) {
       if (menuSelection == 1) {
         timerMode = true;
+        Serial.println("Timer mode selected");
       }
       menuSelection = 0;
       if (competitiveMode) {
@@ -292,6 +382,15 @@ void loop() {
     }
     if (buttonPressed) {
       players = menuSelection + 2;
+      Serial.print("Player count: ");
+      Serial.println(players);
+      tournamentMatch = 0;
+      tournamentRound = 1;
+      alivePlayers = players;
+      for (int i = 0; i < players; i++) {
+        tournamentPlayers[i] = i + 1;
+      }
+
       if (timerMode && timeMinutes == 0) {
         moveMenu(TIMER_MENU);
       } else {
@@ -314,6 +413,8 @@ void loop() {
     }
     if (buttonPressed) {
       timeMinutes = menuSelection;
+      Serial.print("Time per round: ");
+      Serial.println(timeMinutes);
       if (competitiveMode && players == 0) {
         moveMenu(PLAYER_COUNT_MENU);
       } else {
@@ -321,6 +422,8 @@ void loop() {
       }
     }
   } else if (menuNumber == START_GAME) {
+    // if in competitive mode, show which player vs which player
+
     // poll controllers if any has lost asynchroneously
     currentTime = millis();
     if (currentTime - lastTimePoll > I2C_POLL_DELAY) {
@@ -349,8 +452,7 @@ void loop() {
         // display timer to lcd
         int timeLeftMinutes = (endTimeMilis - currentTime) / 60000;
         int timeLeftSeconds = ((endTimeMilis - currentTime) % 60000) / 1000;
-        lcd.setCursor(0, 1);
-        lcd.print("Time left: ");
+        lcd.setCursor(11, 1);
         lcd.print(timeLeftMinutes);
         lcd.print(":");
         if (timeLeftSeconds < 10) {
@@ -366,19 +468,6 @@ void loop() {
     }
 
   } else if (menuNumber == GAME_OVER) {
-    // make regular dots animation with delay
-    lcd.setCursor(12, 1);
-    lcd.print("   ");
-    lcd.setCursor(12, 1);
-    for (int i = 0; i < 4; i++) {
-      lcd.print(".");
-      delay(250);
-    }
-
-    // empty playerscores array
-    for (int i = 0; i < 8; i++) {
-      playerScores[i] = 0;
-    }
 
     Serial.println("sending stop game command");
     // send game over signal to controllers
@@ -416,7 +505,12 @@ void loop() {
         int score = (HiByte << 8) | LoByte;
         Serial.print("Received score from controller: ");
         Serial.println(score);
-        playerScores[controllerAddress - 8] = score;
+        if (controllerAddress == 8) {
+          player1Score = score;
+        } else if (controllerAddress == 9) {
+          player2Score = score;
+        }
+        // playerScores[controllerAddress - 8] = score;
       }
 
       // reset scores on controller
@@ -425,49 +519,60 @@ void loop() {
       Wire.endTransmission();
     }
 
-    // check to see who has the highest score
-    int highestScore = 0;
-    for (int i = 0; i < 8; i++) {
-      Serial.print(playerScores[i]);
-      if (playerScores[i] > highestScore) {
-        highestScore = playerScores[i];
+    if (!skipMenu) { // display winner
+      lcd.clear();
+      lcd.setCursor(0, 0);
+      lcd.print("Winner: ");
+      if (player1Score > player2Score) {
+        lcd.print("Player 1");
+      } else if (player2Score > player1Score) {
+        lcd.print("Player 2");
+      } else {
+        lcd.print("Tie");
+      }
+      while (digitalRead(SW) == HIGH) {
+        delay(100);
       }
     }
 
-    // display winner
-    lcd.clear();
-    lcd.setCursor(0, 0);
-    lcd.print("Winner: ");
-    for (int i = 0; i < CONTROLLER_COUNT; i++) {
-      if (playerScores[i] == highestScore) {
-        lcd.setCursor(0, 1);
-        lcd.print("Player ");
-        lcd.print(i + 1);
-        lcd.print(" ");
+    if (!competitiveMode) { // reset scores array
+      player1Score = 0;
+      player2Score = 0;
+
+      // reset game settings
+      competitiveMode = false;
+      timerMode = false;
+      players = 0;
+      timeMinutes = 0;
+      endTimeMilis = 0;
+
+      moveMenu(PLAYER_MODE_MENU);
+    } else {
+      if (player1Score > player2Score) {
+        tournamentPlayers[tournamentPlayer2Index] = 0;
+        alivePlayers--;
+      } else if (player2Score > player1Score) {
+        tournamentPlayers[tournamentPlayer1Index] = 0;
+        alivePlayers--;
+      } else {
+        tournamentPlayers[tournamentPlayer1Index] = 0;
+        tournamentPlayers[tournamentPlayer2Index] = 0;
+        alivePlayers -= 2;
+      }
+      if (alivePlayers <= 1) {
+        competitiveMode = false;
+        skipMenu = true;
+        Serial.println("Tournament over");
+        moveMenu(GAME_OVER);
+      } else {
+        moveMenu(START_GAME);
       }
     }
-    while (digitalRead(SW) == HIGH) {
-      delay(100);
-    }
-    // reset scores array
-    for (int i = 0; i < 8; i++) {
-      playerScores[i] = 0;
-    }
-
-    // reset game settings
-    competitiveMode = false;
-    timerMode = false;
-    players = 0;
-    timeMinutes = 0;
-    endTimeMilis = 0;
-
-    moveMenu(PLAYER_MODE_MENU);
   }
 
   if (buttonPressed) {
     digitalWrite(BUZZER_PIN, HIGH);
-  } else {
+    delay(100);
     digitalWrite(BUZZER_PIN, LOW);
   }
-  delay(100);
 }
